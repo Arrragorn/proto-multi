@@ -6,20 +6,52 @@ import { State, Player } from "../schema/State.js";
 type InputMsg = { ax: number; ay: number; yaw: number }; // ax=avant/arrière, ay=gauche/droite
 type ShootMsg = { ox: number; oy: number; oz: number; dx: number; dy: number; dz: number; t: number };
 
+function hashHue(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return (h % 360);
+}
+function hslToHex(h: number, s = 0.6, l = 0.55): number {
+  // h: 0..360
+  h /= 360;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h * 12) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+    return Math.round(255 * c);
+  };
+  const r = f(0), g = f(8), b = f(4);
+  return (r << 16) | (g << 8) | b;
+}
+
+
 export class GameRoom extends Room<State> {
   maxClients = 32; // on accepte des spectateurs mais limitera les “joueurs”
   private inputs = new Map<string, { ax: number; ay: number; yaw: number }>();
 
 onCreate() {
   this.setState(new State());
-  this.setPatchRate(50); // 20 Hz
-  this.onMessage("input", (client, data: { ax:number; ay:number; yaw:number }) => {
-    const p = this.state.players.get(client.sessionId);
-    if (!p || p.spectator || !p.alive) return;
-    this.inputs.set(client.sessionId, data); // ← on stocke seulement
-  });
+  this.setPatchRate(1000/30); // 33 Hz
+ this.onMessage("input", (client, data: { ax:number; ay:number; yaw:number }) => {
+  const p = this.state.players.get(client.sessionId);
+  if (!p || p.spectator || !p.alive) return;
+  this.inputs.set(client.sessionId, data);
+  // ⬇️ log throttle (1/10) pour vérifier que ça arrive
+  if (Math.random() < 0.1) {
+    console.log("[input]", client.sessionId, data);
+  }
+});
   this.onMessage("shoot", (client, data) => this.handleShoot(client, data));
-  this.setSimulationInterval((dt) => this.update(dt));
+  let once = false;
+  this.setSimulationInterval((dt) => {
+    if (!once) { console.log("[tick] started"); once = true; }
+    this.update(dt);
+  });
+}
+
+onLeave(client: Client) {
+  this.state.players.delete(client.sessionId);
+  this.inputs.delete(client.sessionId); // ⬅️ nettoyage
 }
 
 private update(dt: number) {
@@ -34,8 +66,8 @@ private update(dt: number) {
 
     p.yaw = inp.yaw;
     const fwdX = Math.sin(p.yaw), fwdZ = Math.cos(p.yaw);
-    p.x += (fwdX * inp.ax + fwdZ * inp.ay) * speed * dtSec;
-    p.z += (fwdZ * inp.ax - fwdX * inp.ay) * speed * dtSec;
+    p.x += (fwdX * inp.ax - fwdZ * inp.ay) * speed * dtSec;
+    p.z += (fwdZ * inp.ax + fwdX * inp.ay) * speed * dtSec;
   });
 
   // respawn
@@ -49,35 +81,27 @@ private update(dt: number) {
   });
 }
 
+
+
   onJoin(client: Client) {
     const p = new Player();
     p.id = client.sessionId;
     p.spectator = this.countActivePlayers() >= 8;
     // spawn aléatoire simple
     [p.x, p.y, p.z] = [Math.random()*10, 0, Math.random()*10];
+
+// 👇 couleur stable basée sur l'ID
+  const hue = hashHue(client.sessionId);
+  p.color = hslToHex(hue);
+
     this.state.players.set(client.sessionId, p);
   }
 
-  onLeave(client: Client) {
-    this.state.players.delete(client.sessionId);
-  }
 
   private countActivePlayers() {
     let n = 0;
     this.state.players.forEach(p => { if (!p.spectator) n++; });
     return n;
-  }
-
-  private handleInput(client: Client, { ax, ay, yaw }: InputMsg) {
-    const p = this.state.players.get(client.sessionId);
-    if (!p || p.spectator || !p.alive) return;
-    p.yaw = yaw;
-    // petite simu serveur
-    const speed = 5 / 60; // u/frame @60fps
-    const fwdX = Math.sin(yaw), fwdZ = Math.cos(yaw);
-    // ay = strafe, ax = forward
-    p.x += (fwdX * ax + fwdZ * ay) * speed;
-    p.z += (fwdZ * ax - fwdX * ay) * speed;
   }
 
   private handleShoot(client: Client, s: ShootMsg) {

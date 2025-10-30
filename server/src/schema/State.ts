@@ -9,6 +9,7 @@ export class Player extends Schema {
   @schemaType("number") z: number = 0;
   @schemaType("number") yaw: number = 0;
   @schemaType("boolean") spectator: boolean = false;
+  @schemaType("number") color: number = 0xffffff; // 👈 couleur hex envoyée aux clients
   respawnAt?: number; // ms epoch
 }
 
