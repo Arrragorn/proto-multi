@@ -41,7 +41,7 @@ onCreate() {
     console.log("[input]", client.sessionId, data);
   }
 });
-  this.onMessage("shoot", (client, data) => this.handleShoot(client, data));
+  this.onMessage("melee", (client) => this.handleMelee(client));
   let once = false;
   this.setSimulationInterval((dt) => {
     if (!once) { console.log("[tick] started"); once = true; }
@@ -104,36 +104,48 @@ private update(dt: number) {
     return n;
   }
 
-  private handleShoot(client: Client, s: ShootMsg) {
-    const shooter = this.state.players.get(client.sessionId);
-    if (!shooter || shooter.spectator || !shooter.alive) return;
+  // server/src/rooms/GameRoom.ts (extrait)
+private lastAttackAt = new Map<string, number>();
+private ATTACK_RANGE = 1.2;     // mètre, ajuster
+private ATTACK_COOLDOWN = 800;  // ms
 
-    // Raycast ultra-simple contre des boîtes 0.6x1.8x0.6 autour de (x,y,z)
-    const maxDist = 30;
-    this.state.players.forEach((target, id) => {
-      if (id === client.sessionId || !target.alive) return;
-      if (this.rayHitsAABB(s, target, maxDist)) {
-        // kill
-        target.alive = false;
-        target.respawnAt = Date.now() + 30_000; // 30s
-      }
-    });
-  }
+private handleMelee(client: Client) {
+  const attacker = this.state.players.get(client.sessionId);
+  if (!attacker || attacker.spectator || !attacker.alive) return;
 
-  private rayHitsAABB(s: ShootMsg, t: Player, maxDist: number) {
-    // AABB centered at (t.x, 0.9, t.z) with half extents (0.3,0.9,0.3)
-    const min = { x: t.x - 0.3, y: 0,   z: t.z - 0.3 };
-    const max = { x: t.x + 0.3, y: 1.8, z: t.z + 0.3 };
-    // Ray-box test (slab), early-out if > maxDist
-    const inv = (v: number) => (Math.abs(v) < 1e-6 ? 1e6 : 1 / v);
-    const dir = { x: s.dx, y: s.dy, z: s.dz };
-    const t1 = (min.x - s.ox) * inv(dir.x), t2 = (max.x - s.ox) * inv(dir.x);
-    const t3 = (min.y - s.oy) * inv(dir.y), t4 = (max.y - s.oy) * inv(dir.y);
-    const t5 = (min.z - s.oz) * inv(dir.z), t6 = (max.z - s.oz) * inv(dir.z);
-    const tmin = Math.max(Math.min(t1,t2), Math.min(t3,t4), Math.min(t5,t6));
-    const tmax = Math.min(Math.max(t1,t2), Math.max(t3,t4), Math.max(t5,t6));
-    if (tmax < 0 || tmin > tmax) return false;
-    return tmin >= 0 && tmin <= maxDist;
-  }
+  const now = Date.now();
+  const last = this.lastAttackAt.get(client.sessionId) ?? 0;
+  if (now - last < this.ATTACK_COOLDOWN) return; // cooldown
+  this.lastAttackAt.set(client.sessionId, now);
+
+  // position & radius (ton joueur peut avoir rayon 0.3)
+  const ar = 0.3;
+  const range = this.ATTACK_RANGE;
+
+  // loop targets
+  this.state.players.forEach((target, id) => {
+    if (id === client.sessionId) return;
+    if (!target.alive || target.spectator) return;
+
+    // distance 2D simple (ignore Y) -> plus rapide
+    const dx = attacker.x - target.x;
+    const dz = attacker.z - target.z;
+    const dist2 = dx*dx + dz*dz;
+    const minDist = (ar + (target.radius ?? 0.3) + range); // si tu stockes radius
+    if (dist2 <= minDist * minDist) {
+      // (optionnel) vérif direction du coup :
+      // const forwardX = Math.sin(attacker.yaw), forwardZ = Math.cos(attacker.yaw);
+      // const dot = (forwardX * (target.x - attacker.x) + forwardZ * (target.z - attacker.z)) / Math.sqrt(dist2);
+      // if (dot < 0.2) return; // pas assez face à la cible
+
+      // kill
+      target.alive = false;
+      target.respawnAt = Date.now() + 30_000;
+      console.log("[hit]");
+      // tu peux broadcast un message kill pour jouer son animation
+      this.broadcast("killed", { by: client.sessionId, target: id });
+    }
+  });
+}
 
 }

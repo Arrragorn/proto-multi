@@ -11,9 +11,9 @@ let roomRef: any = null;
 // --- Ground plane ---
 const groundGeo = new THREE.PlaneGeometry(100, 100);
 const groundMat = new THREE.MeshStandardMaterial({
-  color: 0x333333,
-  roughness: 1,
-  metalness: 0,
+    color: 0x333333,
+    roughness: 1,
+    metalness: 0,
 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
@@ -41,7 +41,7 @@ scene.add(dirLight);
 
 // --- Camera & renderer ---
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 100);
 camera.position.set(0, 1.6, 5);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -57,10 +57,10 @@ document.body.appendChild(renderer.domElement);
 
 // focus + pointer lock pour une souris fluide
 renderer.domElement.addEventListener("click", () => {
-  renderer.domElement.focus();
-  if (renderer.domElement.requestPointerLock) {
-    renderer.domElement.requestPointerLock();
-  }
+    renderer.domElement.focus();
+    if (renderer.domElement.requestPointerLock) {
+        renderer.domElement.requestPointerLock();
+    }
 });
 
 
@@ -73,14 +73,14 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 pmrem.compileEquirectangularShader();
 
 new RGBELoader()
-  .setPath("/hdr/")      // correspond à client/public/hdr/
-  .load("sky.hdr", (hdr) => {
-    const envMap = pmrem.fromEquirectangular(hdr).texture;
-    scene.environment = envMap;   // éclaire PBR (MeshStandard, etc.)
-    scene.background  = envMap;   // affiche l'image en fond (optionnel)
-    hdr.dispose();
-    pmrem.dispose();
-  });
+    .setPath("/hdr/")      // correspond à client/public/hdr/
+    .load("sky.hdr", (hdr) => {
+        const envMap = pmrem.fromEquirectangular(hdr).texture;
+        scene.environment = envMap;   // éclaire PBR (MeshStandard, etc.)
+        scene.background = envMap;   // affiche l'image en fond (optionnel)
+        hdr.dispose();
+        pmrem.dispose();
+    });
 
 
 // joueurs = simples capsules visuelles au début
@@ -99,175 +99,170 @@ let yaw = 0;
 let keys: Record<string, boolean> = {};
 
 function sendInput(room: any) {
-  const ax = (keys["KeyW"]?1:0) + (keys["KeyS"]?-1:0);
-  const ay = (keys["KeyD"]?1:0) + (keys["KeyA"]?-1:0);
-  room.send("input", { ax, ay, yaw });
+    const ax = (keys["KeyW"] ? 1 : 0) + (keys["KeyS"] ? -1 : 0);
+    const ay = (keys["KeyD"] ? 1 : 0) + (keys["KeyA"] ? -1 : 0);
+    room.send("input", { ax, ay, yaw });
 }
 
-function shoot(room: any) {
-  // rayon depuis la caméra
-  const o = camera.getWorldPosition(new THREE.Vector3());
-  const d = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
-  room.send("shoot", { ox:o.x, oy:o.y, oz:o.z, dx:d.x, dy:d.y, dz:d.z, t: performance.now() });
-}
 
 (async () => {
-const room = await joinGame();
-roomRef = room;
+    const room = await joinGame();
+    roomRef = room;
 
-myId = room.sessionId;
+    myId = room.sessionId;
 
-// Attendre le 1er patch d’état pour être sûr que state.players existe
-room.onStateChange.once(() => {
-  const players = room.state.players;
+    // Attendre le 1er patch d’état pour être sûr que state.players existe
+    room.onStateChange.once(() => {
+        const players = room.state.players;
 
-  players.onAdd = (p: any, id: string) => {
-      console.log("[onAdd]", id);
+        players.onAdd = (p: any, id: string) => {
+            console.log("[onAdd]", id);
 
-const m = new THREE.Mesh(
-  capsuleGeo,
-  new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
-);    m.castShadow = true;
-    m.position.set(p.x, 0.9, p.z);
-    meshes.set(id, m);
-    scene.add(m);
+            const m = new THREE.Mesh(
+                capsuleGeo,
+                new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
+            ); m.castShadow = true;
+            m.position.set(p.x, 0.9, p.z);
+            meshes.set(id, m);
+            scene.add(m);
 
-    // si c'est nous, garde une ref pratique
-    if (id === myId) myPlayerRef = p;
+            // si c'est nous, garde une ref pratique
+            if (id === myId) myPlayerRef = p;
 
-    p.onChange = () => {
-  const mm = meshes.get(id)!;
-  mm.position.set(p.x, 0.9, p.z);
-  if (Math.random() < 0.05) {
-    console.log("[remote update]", id, { x: p.x, z: p.z });
-  }
-};
-  };
+            p.onChange = () => {
+                const mm = meshes.get(id)!;
+                mm.position.set(p.x, 0.9, p.z);
+                if (Math.random() < 0.05) {
+                    console.log("[remote update]", id, { x: p.x, z: p.z });
+                }
+            };
+        };
 
-  players.onRemove = (_: any, id: string) => {
-    if (id === myId) myPlayerRef = null;
-    const m = meshes.get(id);
-    if (m) scene.remove(m);
-    meshes.delete(id);
-  };
+        players.onRemove = (_: any, id: string) => {
+            if (id === myId) myPlayerRef = null;
+            const m = meshes.get(id);
+            if (m) scene.remove(m);
+            meshes.delete(id);
+        };
 
-  // hydrate les déjà-présents
-  players.forEach((p: any, id: string) => {
-    const m = new THREE.Mesh(
-  capsuleGeo,
-  new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
-);
-    m.castShadow = true;
-    m.position.set(p.x, 0.9, p.z);
-    meshes.set(id, m);
-    scene.add(m);
+        // hydrate les déjà-présents
+        players.forEach((p: any, id: string) => {
+            const m = new THREE.Mesh(
+                capsuleGeo,
+                new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
+            );
+            m.castShadow = true;
+            m.position.set(p.x, 0.9, p.z);
+            meshes.set(id, m);
+            scene.add(m);
 
-    if (id === myId) myPlayerRef = p;
+            if (id === myId) myPlayerRef = p;
 
-    p.onChange = () => {
-      const mm = meshes.get(id)!;
-      mm.position.set(p.x, 0.9, p.z);
-      (mm.material as THREE.MeshStandardMaterial).opacity = p.alive ? 1 : 0.4;
-    };
-  });
-});
+            p.onChange = () => {
+                const mm = meshes.get(id)!;
+                mm.position.set(p.x, 0.9, p.z);
+                (mm.material as THREE.MeshStandardMaterial).opacity = p.alive ? 1 : 0.4;
+            };
+        });
+    });
 
 
-function isMoveKey(code: string) {
-  return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD" || code === "Space";
-}
-window.addEventListener("keydown", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = true; if (e.code==="Space") shoot(room); });
-window.addEventListener("keyup",   (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = false; });
-  // souris = yaw (ultra simple)
-  addEventListener("mousemove", (e) => { yaw -= e.movementX * 0.003; camera.rotation.y = yaw; });
-
-  // boucle client
-  let last = performance.now();
-
-function tick() {
-  const now = performance.now();
-  const dtSec = (now - last) / 1000;
-  last = now;
-
-  sendInput(room); // on continue d’envoyer l’état des touches
-
-  const players = roomRef?.state?.players;
-if (players) {
-  // a) créer les manquants
-  players.forEach((p: any, id: string) => {
-    if (!meshes.has(id)) {
-      const m = new THREE.Mesh(
-  capsuleGeo,
-  new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
-);
-      m.castShadow = true;
-      m.position.set(p.x, 0.9, p.z);
-      meshes.set(id, m);
-      scene.add(m);
-      if (id === myId) myPlayerRef = p;
-      // (optionnel) log:
-      // console.log("[reconcile add]", id);
+    function isMoveKey(code: string) {
+        return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD" || code === "Space";
     }
-  });
+    window.addEventListener("keydown", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = true; if (e.code === "Space") room.send("melee"); });
+    window.addEventListener("keyup", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = false; });
+    // souris = yaw (ultra simple)
+    addEventListener("mousemove", (e) => { yaw -= e.movementX * 0.003; camera.rotation.y = yaw; });
 
-  // b) supprimer ceux qui n'existent plus côté serveur
-  for (const [id, mesh] of Array.from(meshes.entries())) {
-    if (!players.get(id)) {
-      scene.remove(mesh);
-      meshes.delete(id);
-      if (id === myId) myPlayerRef = null;
-      // console.log("[reconcile remove]", id);
+    // boucle client
+    let last = performance.now();
+
+    function tick() {
+        const now = performance.now();
+        const dtSec = (now - last) / 1000;
+        last = now;
+
+        sendInput(room); // on continue d’envoyer l’état des touches
+
+        const players = roomRef?.state?.players;
+        if (players) {
+            // a) créer les manquants
+            players.forEach((p: any, id: string) => {
+                if (!meshes.has(id)) {
+                    const m = new THREE.Mesh(
+                        capsuleGeo,
+                        new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
+                    );
+                    m.castShadow = true;
+                    m.position.set(p.x, 0.9, p.z);
+                    meshes.set(id, m);
+                    scene.add(m);
+                    if (id === myId) myPlayerRef = p;
+                    // (optionnel) log:
+                    // console.log("[reconcile add]", id);
+                }
+            });
+
+            // b) supprimer ceux qui n'existent plus côté serveur
+            for (const [id, mesh] of Array.from(meshes.entries())) {
+                if (!players.get(id)) {
+                    scene.remove(mesh);
+                    meshes.delete(id);
+                    if (id === myId) myPlayerRef = null;
+                    // console.log("[reconcile remove]", id);
+                }
+            }
+        }
+
+        // caméra 3e personne + prédiction locale du joueur
+        const myMesh = meshes.get(myId);
+        if (myMesh) {
+            // prédiction locale (corrigée par p.onChange quand les patchs arrivent)
+            const ax = (keys["KeyW"] ? 1 : 0) + (keys["KeyS"] ? -1 : 0);
+            const ay = (keys["KeyD"] ? 1 : 0) + (keys["KeyA"] ? -1 : 0);
+            const speed = 5; // mêmes unités que le serveur (u/s)
+            const fwdX = Math.sin(yaw), fwdZ = Math.cos(yaw);
+
+            myMesh.position.x += (fwdX * ax - fwdZ * ay) * speed * dtSec;
+            myMesh.position.z += (fwdZ * ax + fwdX * ay) * speed * dtSec;
+
+            // caméra qui suit
+            const dist = 3.5, height = 1.6;
+            const back = new THREE.Vector3(0, 0, -dist).applyEuler(new THREE.Euler(0, yaw, 0));
+            camera.position.set(myMesh.position.x + back.x, height, myMesh.position.z + back.z);
+            camera.lookAt(myMesh.position.x, 0.9, myMesh.position.z);
+        }
+        const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+        if (roomRef?.state?.players) {
+            roomRef.state.players.forEach((p: any, id: string) => {
+                const m = meshes.get(id);
+                if (!m) return;
+                const mat = m.material as THREE.MeshStandardMaterial;
+                mat.transparent = !p.alive;
+                mat.opacity = p.alive ? 1 : 0.4;
+                mat.needsUpdate = true;
+
+                // pour TOUS les joueurs (y compris toi), on suit la position serveur
+                // - pour toi: ça sert de correction douce (après la prédiction locale)
+                // - pour les autres: c'est leur position visible
+                const targetX = p.x;
+                const targetZ = p.z;
+
+                // facteur de lissage (ajuste entre 0.2 et 0.5 selon ton goût)
+                const s = 0.25;
+
+                m.position.x = lerp(m.position.x, targetX, s);
+                m.position.z = lerp(m.position.z, targetZ, s);
+                //m.position.x = targetX;
+                //m.position.z = targetZ;
+
+            });
+        }
+
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
     }
-  }
-}
-
-  // caméra 3e personne + prédiction locale du joueur
-  const myMesh = meshes.get(myId);
-  if (myMesh) {
-    // prédiction locale (corrigée par p.onChange quand les patchs arrivent)
-    const ax = (keys["KeyW"]?1:0) + (keys["KeyS"]?-1:0);
-    const ay = (keys["KeyD"]?1:0) + (keys["KeyA"]?-1:0);
-    const speed = 5; // mêmes unités que le serveur (u/s)
-    const fwdX = Math.sin(yaw), fwdZ = Math.cos(yaw);
-
-    myMesh.position.x += (fwdX * ax - fwdZ * ay) * speed * dtSec;
-    myMesh.position.z += (fwdZ * ax + fwdX * ay) * speed * dtSec;
-
-    // caméra qui suit
-    const dist = 3.5, height = 1.6;
-    const back = new THREE.Vector3(0, 0, -dist).applyEuler(new THREE.Euler(0, yaw, 0));
-    camera.position.set(myMesh.position.x + back.x, height, myMesh.position.z + back.z);
-    camera.lookAt(myMesh.position.x, 0.9, myMesh.position.z);
-  }
-  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-if (roomRef?.state?.players) {
-  roomRef.state.players.forEach((p: any, id: string) => {
-    const m = meshes.get(id);
-    if (!m) return;
-    const mat = m.material as THREE.MeshStandardMaterial;
-mat.transparent = !p.alive;
-mat.opacity = p.alive ? 1 : 0.4;
-
-    // pour TOUS les joueurs (y compris toi), on suit la position serveur
-    // - pour toi: ça sert de correction douce (après la prédiction locale)
-    // - pour les autres: c'est leur position visible
-    const targetX = p.x;
-    const targetZ = p.z;
-
-    // facteur de lissage (ajuste entre 0.2 et 0.5 selon ton goût)
-    const s = 0.25;
-
-    m.position.x = lerp(m.position.x, targetX, s);
-    m.position.z = lerp(m.position.z, targetZ, s);
-    //m.position.x = targetX;
-    //m.position.z = targetZ;
-    
-  });
-}
-
-  renderer.render(scene, camera);
-  requestAnimationFrame(tick);
-}
-  tick();
+    tick();
 })();
