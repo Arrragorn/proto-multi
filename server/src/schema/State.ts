@@ -10,6 +10,10 @@ export class Player extends Schema {
   @schemaType("number") yaw: number = 0;
   @schemaType("boolean") spectator: boolean = false;
   @schemaType("number") color: number = 0xffffff; // 👈 couleur hex envoyée aux clients
+
+  @schemaType("number") kills: number = 0; 
+  @schemaType("number") deaths: number = 0;
+
   respawnAt?: number; // ms epoch
 }
 

@@ -118,6 +118,8 @@ private handleMelee(client: Client) {
   if (now - last < this.ATTACK_COOLDOWN) return; // cooldown
   this.lastAttackAt.set(client.sessionId, now);
 
+  this.broadcast("attack", { id: client.sessionId, yaw: attacker.yaw, t: now });
+
   // position & radius (ton joueur peut avoir rayon 0.3)
   const ar = 0.3;
   const range = this.ATTACK_RANGE;
@@ -134,13 +136,18 @@ private handleMelee(client: Client) {
     const minDist = (ar + (target.radius ?? 0.3) + range); // si tu stockes radius
     if (dist2 <= minDist * minDist) {
       // (optionnel) vérif direction du coup :
-      // const forwardX = Math.sin(attacker.yaw), forwardZ = Math.cos(attacker.yaw);
-      // const dot = (forwardX * (target.x - attacker.x) + forwardZ * (target.z - attacker.z)) / Math.sqrt(dist2);
-      // if (dot < 0.2) return; // pas assez face à la cible
+      const forwardX = Math.sin(attacker.yaw), forwardZ = Math.cos(attacker.yaw);
+      const dot = (forwardX * (target.x - attacker.x) + forwardZ * (target.z - attacker.z)) / Math.sqrt(dist2);
+      if (dot < 0.2) return; // pas assez face à la cible
 
       // kill
       target.alive = false;
-      target.respawnAt = Date.now() + 30_000;
+      target.respawnAt = Date.now() + 10_000;
+
+      // scores
+      attacker.kills++;
+      target.deaths++;
+
       console.log("[hit]");
       // tu peux broadcast un message kill pour jouer son animation
       this.broadcast("killed", { by: client.sessionId, target: id });

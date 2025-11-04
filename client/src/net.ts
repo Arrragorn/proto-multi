@@ -8,5 +8,5 @@ const WS_URL =
 export const client = new Colyseus.Client(WS_URL);
 export async function joinGame() {
   const room = await client.joinOrCreate("game");
-  return room;
+  return [room, Colyseus.getStateCallbacks(room)];
 }
