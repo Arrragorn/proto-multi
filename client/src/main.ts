@@ -3,7 +3,9 @@ import { joinGame } from "./net";
 import * as THREE from "three";
 import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
 import { playAttackFX } from "./fx";
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+const gltfLoader = new GLTFLoader();
 
 const scene = new THREE.Scene();
 let roomRef: any = null;
@@ -24,6 +26,20 @@ scene.add(ground);
 const grid = new THREE.GridHelper(100, 50, 0xdddddd, 0x777777); // (taille, divisions, couleurs)
 grid.position.y = 0.01; // évite le z-fighting avec le ground
 scene.add(grid);
+
+
+const box1 = new THREE.Mesh(
+    new THREE.BoxGeometry(10, 8, 10),
+    new THREE.MeshStandardMaterial({ color: 0x88cc88 })
+);
+box1.position.set(0, 5, 0);
+box1.castShadow = true;
+box1.receiveShadow = true;
+//scene.add(box1);
+const gltf = await gltfLoader.loadAsync( 'public/models/city.glb' );
+gltf.scene.scale.set(5,4,5);
+scene.add( gltf.scene );
+
 
 // --- Lighting ---
 const ambient = new THREE.AmbientLight(0xffffff, 0.4);
@@ -188,7 +204,7 @@ function sendInput(room: any) {
 
             $(p).onChange(() => {
                 const mm = meshes.get(id)!;
-                mm.position.set(p.x, 0.9, p.z);
+                mm.position.set(p.x, p.y, p.z);
                 const mat = mm.material as THREE.MeshStandardMaterial;
                 mat.transparent = !p.alive;
                 mat.opacity = p.alive ? 1 : 0.4;
@@ -196,8 +212,8 @@ function sendInput(room: any) {
                 if (id === myId) {
                     const dist = 3.5, height = 1.6;
                     const back = new THREE.Vector3(0, 0, -dist).applyEuler(new THREE.Euler(0, yaw, 0));
-                    camera.position.set(p.x + back.x, height, p.z + back.z);
-                    camera.lookAt(p.x, 0.9, p.z);
+                    camera.position.set(p.x + back.x, p.y + height, p.z + back.z);
+                    camera.lookAt(p.x, p.y + 0.9, p.z);
                 }
             });
 

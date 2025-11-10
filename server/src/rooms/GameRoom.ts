@@ -3,6 +3,10 @@ import { Room } from "colyseus";
 import type { Client } from "colyseus";
 import { State, Player } from "../schema/State.js";
 
+import { HeightField } from "../heightfield.js";
+const HF = new HeightField("public/heightmap.bin", "public/heightmap.meta.json");
+
+
 type InputMsg = { ax: number; ay: number; yaw: number }; // ax=avant/arrière, ay=gauche/droite
 type ShootMsg = { ox: number; oy: number; oz: number; dx: number; dy: number; dz: number; t: number };
 
@@ -68,6 +72,7 @@ private update(dt: number) {
     const fwdX = Math.sin(p.yaw), fwdZ = Math.cos(p.yaw);
     p.x += (fwdX * inp.ax - fwdZ * inp.ay) * speed * dtSec;
     p.z += (fwdZ * inp.ax + fwdX * inp.ay) * speed * dtSec;
+    p.y = HF.H(p.x, p.z);
   });
 
   // respawn
@@ -86,7 +91,8 @@ private update(dt: number) {
   onJoin(client: Client) {
     const p = new Player();
     p.id = client.sessionId;
-    p.spectator = this.countActivePlayers() >= 8;
+    //p.spectator = this.countActivePlayers() >= 8;
+    p.spectator = false;
     // spawn aléatoire simple
     [p.x, p.y, p.z] = [Math.random()*10, 0, Math.random()*10];
 
