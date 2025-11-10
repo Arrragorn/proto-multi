@@ -36,9 +36,6 @@ box1.position.set(0, 5, 0);
 box1.castShadow = true;
 box1.receiveShadow = true;
 //scene.add(box1);
-const gltf = await gltfLoader.loadAsync( 'public/models/city.glb' );
-gltf.scene.scale.set(5,4,5);
-scene.add( gltf.scene );
 
 
 // --- Lighting ---
@@ -177,6 +174,12 @@ function sendInput(room: any) {
 
 
 (async () => {
+
+	const gltf = await gltfLoader.loadAsync( '/models/city.glb' );
+	gltf.scene.scale.set(5,4,5);
+	scene.add( gltf.scene );
+
+
     const [room, $] = await joinGame();
     roomRef = room;
 
