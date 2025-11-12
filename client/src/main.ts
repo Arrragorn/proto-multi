@@ -175,7 +175,7 @@ function sendInput(room: any) {
 
 (async () => {
 
-	const gltf = await gltfLoader.loadAsync( '/models/city.glb' );
+	const gltf = await gltfLoader.loadAsync( '/models/city2.glb' );
 	gltf.scene.scale.set(5,4,5);
 	scene.add( gltf.scene );
 
