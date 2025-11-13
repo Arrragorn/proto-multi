@@ -24,7 +24,7 @@ export function playAttackFX(attackerMesh: THREE.Mesh, yaw: number, scene: THREE
   fx.position.copy(attackerMesh.position);
   const forward = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(0, yaw, 0));
   fx.position.addScaledVector(forward, 0.8); // un peu devant
-  fx.position.y = 1.0;                        // hauteur du "coup"
+  //fx.position.y += 0.5;                        // hauteur du "coup"
   fx.rotation.y = yaw;
 
   // léger arc : on incline un peu

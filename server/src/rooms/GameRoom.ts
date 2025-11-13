@@ -67,12 +67,27 @@ private update(dt: number) {
     if (p.spectator || !p.alive) return;
     const inp = this.inputs.get(id);
     if (!inp) return;
-
     p.yaw = inp.yaw;
+    if(inp.ax === 0 && inp.ay === 0){
+      return;
+    }
+    
     const fwdX = Math.sin(p.yaw), fwdZ = Math.cos(p.yaw);
-    p.x += (fwdX * inp.ax - fwdZ * inp.ay) * speed * dtSec;
-    p.z += (fwdZ * inp.ax + fwdX * inp.ay) * speed * dtSec;
-    p.y = HF.H(p.x, p.z);
+    const L = speed*dtSec;
+    const dx = L*(fwdX * inp.ax - fwdZ * inp.ay);
+    const dz = L*(fwdZ * inp.ax + fwdX * inp.ay);
+    const x = p.x + dx;
+    const z = p.z + dz;
+    const y = HF.H(x, z);
+    const dy = y - p.y;
+    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (len < 0.001){
+      return;
+    }
+    const ratio = L/len;
+    p.x += dx * ratio;
+    p.z += dz * ratio;
+    p.y += dy * ratio;
   });
 
   // respawn
@@ -94,7 +109,8 @@ private update(dt: number) {
     //p.spectator = this.countActivePlayers() >= 8;
     p.spectator = false;
     // spawn aléatoire simple
-    [p.x, p.y, p.z] = [Math.random()*10, 0, Math.random()*10];
+    [p.x, p.z] = [(Math.random()-0.5)*100, (Math.random()-0.5)*100];
+    p.y = HF.H(p.x, p.z);
 
 // 👇 couleur stable basée sur l'ID
   const hue = hashHue(client.sessionId);

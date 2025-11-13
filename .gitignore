@@ -19,6 +19,7 @@ coverage/
 .DS_Store
 Thumbs.db
 .venv/
+.ipynb_checkpoints/
 
 # Editor
 .vscode/

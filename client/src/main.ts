@@ -99,34 +99,34 @@ document.body.appendChild(hud);
 
 
 function renderScoreboard() {
-  const players = roomRef?.state?.players;
-  if (!players) return;
+    const players = roomRef?.state?.players;
+    if (!players) return;
 
-  const rows: Array<{id:string; kills:number; deaths:number; color:number}> = [];
-  players.forEach((p:any, id:string) => {
-    rows.push({ id, kills: p.kills ?? 0, deaths: p.deaths ?? 0, color: p.color ?? 0xffffff });
-  });
+    const rows: Array<{ id: string; kills: number; deaths: number; color: number }> = [];
+    players.forEach((p: any, id: string) => {
+        rows.push({ id, kills: p.kills ?? 0, deaths: p.deaths ?? 0, color: p.color ?? 0xffffff });
+    });
 
-  rows.sort((a,b) => b.kills - a.kills || a.deaths - b.deaths);
+    rows.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
 
-  const toHex = (n:number)=>"#"+n.toString(16).padStart(6,"0");
+    const toHex = (n: number) => "#" + n.toString(16).padStart(6, "0");
 
-  let html = `<div style="font-weight:600;margin-bottom:6px;">Score</div>`;
-  html += `<div style="display:grid;grid-template-columns:auto 44px 60px;gap:4px 10px;align-items:center">`;
-  html += `<div style="opacity:.8">Joueur</div><div style="opacity:.8">Kills</div><div style="opacity:.8">Deaths</div>`;
-  for (const r of rows) {
-    const me = r.id === myId;
-    html += `
-      <div style="display:flex;align-items:center;gap:6px;${me?'font-weight:700;':''}">
+    let html = `<div style="font-weight:600;margin-bottom:6px;">Score</div>`;
+    html += `<div style="display:grid;grid-template-columns:auto 44px 60px;gap:4px 10px;align-items:center">`;
+    html += `<div style="opacity:.8">Joueur</div><div style="opacity:.8">Kills</div><div style="opacity:.8">Deaths</div>`;
+    for (const r of rows) {
+        const me = r.id === myId;
+        html += `
+      <div style="display:flex;align-items:center;gap:6px;${me ? 'font-weight:700;' : ''}">
         <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:${toHex(r.color)}"></span>
-        <span style="max-width:140px;overflow:hidden;text-overflow:ellipsis;">${r.id.slice(0,6)}</span>
+        <span style="max-width:140px;overflow:hidden;text-overflow:ellipsis;">${r.id.slice(0, 6)}</span>
       </div>
       <div>${r.kills}</div>
       <div>${r.deaths}</div>
     `;
-  }
-  html += `</div>`;
-  hud.innerHTML = html;
+    }
+    html += `</div>`;
+    hud.innerHTML = html;
 }
 
 // update toutes les 500 ms (simple et suffisant)
@@ -175,9 +175,9 @@ function sendInput(room: any) {
 
 (async () => {
 
-	const gltf = await gltfLoader.loadAsync( '/models/city2.glb' );
-	gltf.scene.scale.set(5,4,5);
-	scene.add( gltf.scene );
+    const gltf = await gltfLoader.loadAsync('/models/city2.glb');
+    gltf.scene.scale.set(5, 4, 5);
+    scene.add(gltf.scene);
 
 
     const [room, $] = await joinGame();
@@ -203,11 +203,16 @@ function sendInput(room: any) {
             m.position.set(p.x, 0.9, p.z);
             meshes.set(id, m);
             scene.add(m);
-
+            if (id === myId) {
+                const dist = 3.5, height = 1.6;
+                const back = new THREE.Vector3(0, 0, -dist).applyEuler(new THREE.Euler(0, yaw, 0));
+                camera.position.set(p.x + back.x, p.y + height, p.z + back.z);
+                camera.lookAt(p.x, p.y + 0.9, p.z);
+            }
 
             $(p).onChange(() => {
                 const mm = meshes.get(id)!;
-                mm.position.set(p.x, p.y, p.z);
+                mm.position.set(p.x, p.y + 0.95, p.z);
                 const mat = mm.material as THREE.MeshStandardMaterial;
                 mat.transparent = !p.alive;
                 mat.opacity = p.alive ? 1 : 0.4;
