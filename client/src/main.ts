@@ -55,6 +55,9 @@ scene.add(dirLight);
 // const helper = new THREE.DirectionalLightHelper(dirLight);
 // scene.add(helper);
 
+//NPCs
+const npcMeshes = new Map<string, THREE.Mesh>();
+const npcGeo = new THREE.CapsuleGeometry(0.28, 0.9, 4, 8);
 
 
 // --- Camera & renderer ---
@@ -233,7 +236,42 @@ function sendInput(room: any) {
             if (m) scene.remove(m);
             meshes.delete(id);
         });
+
+        $(room.state).npcs.onAdd((n: any, id: string) => {
+            const m = new THREE.Mesh(
+                npcGeo,
+                new THREE.MeshStandardMaterial({
+                    color: n.color,
+                    transparent: false,
+                    opacity: 1.0,
+                })
+            );
+            m.castShadow = true;
+            m.position.set(n.x, n.y+0.95, n.z);
+            npcMeshes.set(id, m);
+            scene.add(m);
+
+            $(n).onChange(() => {
+                const mm = npcMeshes.get(id); if (!mm) return;
+                mm.position.set(n.x, n.y+0.95, n.z);
+            });
+        });
+
+        // onRemove
+        $(room.state).npcs.onRemove((_: any, id: string) => {
+            const m = npcMeshes.get(id);
+            if (m) scene.remove(m);
+            npcMeshes.delete(id);
+        });
+
+        // hydrate
+        /*npcs.forEach((_n: any, id: string) => {
+            if (!npcMeshes.has(id)) $(room.state).npcs.triggerOnAdd(id);
+        });*/
+
     });
+
+
 
 
     function isMoveKey(code: string) {

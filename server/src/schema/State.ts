@@ -17,6 +17,16 @@ export class Player extends Schema {
   respawnAt?: number; // ms epoch
 }
 
+export class NPC extends Schema {
+  @schemaType("string") id!: string;
+  @schemaType("number") x: number = 0;
+  @schemaType("number") y: number = 0;
+  @schemaType("number") z: number = 0;
+  @schemaType("number") yaw: number = 0;
+  @schemaType("number") color: number = 0xffffff; // 👈 couleur hex envoyée aux clients
+}
+
 export class State extends Schema {
   @schemaType({ map: Player }) players = new MapSchema<Player>();
+  @schemaType({ map: NPC }) npcs = new MapSchema<NPC>();
 }
