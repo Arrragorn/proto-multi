@@ -84,6 +84,13 @@ renderer.domElement.addEventListener("click", () => {
 
 document.body.appendChild(renderer.domElement);
 
+const toHex = (n: number) => "#" + n.toString(16).padStart(6, "0");
+const wrapPi = (a: number) => {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+};
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 const hud = document.createElement("div");
 hud.style.position = "fixed";
@@ -100,6 +107,79 @@ hud.style.lineHeight = "1.2";
 hud.style.pointerEvents = "none";
 document.body.appendChild(hud);
 
+const compass = document.createElement("canvas");
+compass.width = compass.height = 150;
+Object.assign(compass.style, {
+  position: "fixed",
+  left: "50%",
+  bottom: "16px",
+  transform: "translateX(-50%)",
+  pointerEvents: "none",
+  filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.45))",
+});
+const compassCtx = compass.getContext("2d")!;
+document.body.appendChild(compass);
+
+function getTargetInfo(targetId?: string) {
+  if (!targetId || !roomRef) return null;
+  const p = roomRef.state.players.get(targetId);
+  if (p) {
+    if (!p.alive || p.spectator) return null;
+    return { id: targetId, color: p.color ?? 0xffffff, x: p.x, z: p.z };
+  }
+  const n = roomRef.state.npcs.get(targetId);
+  if (n) {
+    return { id: targetId, color: n.color ?? 0xffffff, x: n.x, z: n.z };
+  }
+  return null;
+}
+
+
+function drawCompass() {
+  compassCtx.clearRect(0, 0, compass.width, compass.height);
+  if (!roomRef || !myPlayerRef || !myPlayerRef.targetId) return;
+
+  const target = getTargetInfo(myPlayerRef.targetId);
+  if (!target) return;
+
+  const dx = target.x - myPlayerRef.x;
+  const dz = target.z - myPlayerRef.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.01) return;
+
+  const angleToTarget = -Math.atan2(dx, dz); // même convention que yaw
+  const rel = wrapPi(angleToTarget + (myPlayerRef.yaw ?? yaw));
+  const distMin = 100.0;
+  const distMax = 20.0;
+  const spreadMin = 0.2;
+  const spreadMax = 2 * Math.PI;
+  const spread = Math.min(spreadMax, Math.max(spreadMin,(dist-distMin)/(distMax-distMin) * (spreadMax-spreadMin) + spreadMin)); // plus proche -> plus large
+
+  const w = compass.width, h = compass.height, r = w * 0.38;
+  compassCtx.save();
+  compassCtx.translate(w / 2, h / 2);
+  compassCtx.rotate(-Math.PI / 2); // 0 rad = haut
+  compassCtx.strokeStyle = "rgba(255,255,255,0.18)";
+  compassCtx.lineWidth = 4;
+  compassCtx.beginPath();
+  compassCtx.arc(0, 0, r, 0, Math.PI * 2);
+  compassCtx.stroke();
+
+  compassCtx.strokeStyle = toHex(target.color ?? 0xffffff);
+  compassCtx.lineWidth = 12;
+  compassCtx.lineCap = "round";
+  compassCtx.beginPath();
+  compassCtx.arc(0, 0, r, rel - spread / 2, rel + spread / 2);
+  compassCtx.stroke();
+  compassCtx.restore();
+
+  compassCtx.fillStyle = "#fff";
+  compassCtx.font = "12px system-ui, sans-serif";
+  compassCtx.textAlign = "center";
+  //compassCtx.fillText(`${target.id.slice(0, 6)} • ${dist.toFixed(1)}m`, w / 2, h - 8);
+}
+
+
 
 function renderScoreboard() {
     const players = roomRef?.state?.players;
@@ -112,9 +192,14 @@ function renderScoreboard() {
 
     rows.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
 
-    const toHex = (n: number) => "#" + n.toString(16).padStart(6, "0");
+    const targetInfo = getTargetInfo(myPlayerRef?.targetId);
+    const targetHtml = targetInfo
+        ? `<div style="margin-bottom:8px;">Cible: <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:${toHex(targetInfo.color)}"></span> ${targetInfo.id.slice(0, 6)}</div>`
+        : `<div style="margin-bottom:8px;opacity:.8">Cible: aucune pour l’instant</div>`;
+    let html = targetHtml;
+    // ...puis le tableau des scores existant
 
-    let html = `<div style="font-weight:600;margin-bottom:6px;">Score</div>`;
+    html += `<div style="font-weight:600;margin-bottom:6px;">Score</div>`;
     html += `<div style="display:grid;grid-template-columns:auto 44px 60px;gap:4px 10px;align-items:center">`;
     html += `<div style="opacity:.8">Joueur</div><div style="opacity:.8">Kills</div><div style="opacity:.8">Deaths</div>`;
     for (const r of rows) {
@@ -161,11 +246,12 @@ let myId = "";
 let myPlayerRef: any = null; // référence du joueur local côté état
 
 let yaw = 0;
+let pitch = 0;
 let keys: Record<string, boolean> = {};
 
 function sendInput(room: any) {
-    const ax = (keys["KeyW"] ? 1 : 0) + (keys["KeyS"] ? -1 : 0);
-    const ay = (keys["KeyD"] ? 1 : 0) + (keys["KeyA"] ? -1 : 0);
+    const ax = (keys["KeyW"] || keys["ArrowUp"] ? 1 : 0) + (keys["KeyS"] || keys["ArrowDown"] ? -1 : 0);
+    const ay = (keys["KeyD"] || keys["ArrowRight"] ? 1 : 0) + (keys["KeyA"] || keys["ArrowLeft"] ? -1 : 0);
     room.send("input", { ax, ay, yaw });
 }
 
@@ -174,6 +260,16 @@ function sendInput(room: any) {
 
 
 
+
+function positionCamera(player: any) {
+    const dist = 3.5, targetHeight = 0.95;
+    const target = new THREE.Vector3(player.x, player.y + targetHeight, player.z);
+    const cosP = Math.cos(pitch);
+    const sinP = Math.sin(pitch);
+    const back = new THREE.Vector3(0, sinP * dist, -cosP * dist).applyEuler(new THREE.Euler(0, yaw, 0));
+    camera.position.copy(target).add(back);
+    camera.lookAt(target);
+}
 
 
 (async () => {
@@ -198,19 +294,17 @@ function sendInput(room: any) {
     room.onStateChange.once(() => {
         const players = room.state.players;
         $(room.state).players.onAdd((p: any, id: string) => {
+            if (id === myId) myPlayerRef = p;
             console.log("[onAdd]", id);
             const m = new THREE.Mesh(
                 capsuleGeo,
                 new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
             ); m.castShadow = true;
-            m.position.set(p.x, 0.9, p.z);
+            m.position.set(p.x, p.y + 0.95, p.z);
             meshes.set(id, m);
             scene.add(m);
             if (id === myId) {
-                const dist = 3.5, height = 1.6;
-                const back = new THREE.Vector3(0, 0, -dist).applyEuler(new THREE.Euler(0, yaw, 0));
-                camera.position.set(p.x + back.x, p.y + height, p.z + back.z);
-                camera.lookAt(p.x, p.y + 0.9, p.z);
+                positionCamera(p);
             }
 
             $(p).onChange(() => {
@@ -221,10 +315,7 @@ function sendInput(room: any) {
                 mat.opacity = p.alive ? 1 : 0.4;
                 mat.needsUpdate = true;
                 if (id === myId) {
-                    const dist = 3.5, height = 1.6;
-                    const back = new THREE.Vector3(0, 0, -dist).applyEuler(new THREE.Euler(0, yaw, 0));
-                    camera.position.set(p.x + back.x, p.y + height, p.z + back.z);
-                    camera.lookAt(p.x, p.y + 0.9, p.z);
+                    positionCamera(p);
                 }
             });
 
@@ -247,13 +338,13 @@ function sendInput(room: any) {
                 })
             );
             m.castShadow = true;
-            m.position.set(n.x, n.y+0.95, n.z);
+            m.position.set(n.x, n.y + 0.95, n.z);
             npcMeshes.set(id, m);
             scene.add(m);
 
             $(n).onChange(() => {
                 const mm = npcMeshes.get(id); if (!mm) return;
-                mm.position.set(n.x, n.y+0.95, n.z);
+                mm.position.set(n.x, n.y + 0.95, n.z);
             });
         });
 
@@ -275,12 +366,17 @@ function sendInput(room: any) {
 
 
     function isMoveKey(code: string) {
-        return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD" || code === "Space";
+        return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD" || code === "Space" ||
+            code === "ArrowUp" || code === "ArrowDown" || code === "ArrowLeft" || code === "ArrowRight";
     }
     window.addEventListener("keydown", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = true; if (e.code === "Space") room.send("melee"); });
     window.addEventListener("keyup", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = false; });
     // souris = yaw (ultra simple)
-    addEventListener("mousemove", (e) => { yaw -= e.movementX * 0.003; /*camera.rotation.y = yaw;*/ });
+    addEventListener("mousemove", (e) => {
+        yaw -= e.movementX * 0.003;
+        pitch = clamp(pitch + e.movementY * 0.0025, -1.2, 0.6);
+        if (myPlayerRef) positionCamera(myPlayerRef);
+    });
 
     // boucle client
     let last = performance.now();
@@ -291,6 +387,7 @@ function sendInput(room: any) {
         last = now;
 
         sendInput(room); // on continue d’envoyer l’état des touches
+        drawCompass();
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
     }

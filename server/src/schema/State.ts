@@ -13,6 +13,7 @@ export class Player extends Schema {
 
   @schemaType("number") kills: number = 0; 
   @schemaType("number") deaths: number = 0;
+  @schemaType("string") targetId: string = "";   // id de la cible actuelle
 
   respawnAt?: number; // ms epoch
 }
