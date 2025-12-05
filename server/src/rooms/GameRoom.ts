@@ -52,6 +52,7 @@ export class GameRoom extends Room<State> {
       }
     });
     this.onMessage("melee", (client) => this.handleMelee(client));
+    this.onMessage("setName", (client, data: { name: string }) => this.handleSetName(client, data));
 
     this.spawnRabbit();
     this.spawnNPCs(Math.max(0, N_NPCS - 1)); // lapin + reste des NPCs
@@ -229,6 +230,7 @@ export class GameRoom extends Room<State> {
   onJoin(client: Client) {
     const p = new Player();
     p.id = client.sessionId;
+    p.name = "Anonyme";
     p.spectator = this.countActivePlayers() >= 32;
     //p.spectator = false;
     // spawn aléatoire simple
@@ -334,6 +336,15 @@ export class GameRoom extends Room<State> {
   private removeFromHuntOrder(id: string) {
     const idx = this.huntOrder.indexOf(id);
     if (idx >= 0) this.huntOrder.splice(idx, 1);
+  }
+
+  private handleSetName(client: Client, data: { name: string }) {
+    const p = this.state.players.get(client.sessionId);
+    if (!p) return;
+    const raw = typeof data?.name === "string" ? data.name : "";
+    const cleaned = raw.replace(/\s+/g, " ").trim().slice(0, 24);
+    const safe = cleaned || "Anonyme";
+    p.name = safe;
   }
 
 }

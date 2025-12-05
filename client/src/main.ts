@@ -91,6 +91,7 @@ const wrapPi = (a: number) => {
   return a;
 };
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+let currentName = "";
 
 const hud = document.createElement("div");
 hud.style.position = "fixed";
@@ -120,16 +121,29 @@ Object.assign(compass.style, {
 const compassCtx = compass.getContext("2d")!;
 document.body.appendChild(compass);
 
+// nom chargé localement (défini via /config)
+function loadName() {
+  const stored = localStorage.getItem("playerName") || "";
+  return stored.trim().slice(0, 24);
+}
+function setNameLocal(name: string) {
+  const clean = name.replace(/\s+/g, " ").trim().slice(0, 24);
+  const safe = clean || "Anonyme";
+  currentName = safe;
+  if (roomRef) roomRef.send("setName", { name: safe });
+}
+setNameLocal(loadName() || "Joueur");
+
 function getTargetInfo(targetId?: string) {
   if (!targetId || !roomRef) return null;
   const p = roomRef.state.players.get(targetId);
   if (p) {
     if (!p.alive || p.spectator) return null;
-    return { id: targetId, color: p.color ?? 0xffffff, x: p.x, z: p.z };
+    return { id: targetId, label: p.name || targetId.slice(0, 6), color: p.color ?? 0xffffff, x: p.x, z: p.z };
   }
   const n = roomRef.state.npcs.get(targetId);
   if (n) {
-    return { id: targetId, color: n.color ?? 0xffffff, x: n.x, z: n.z };
+    return { id: targetId, label: targetId.slice(0, 6), color: n.color ?? 0xffffff, x: n.x, z: n.z };
   }
   return null;
 }
@@ -185,16 +199,16 @@ function renderScoreboard() {
     const players = roomRef?.state?.players;
     if (!players) return;
 
-    const rows: Array<{ id: string; kills: number; deaths: number; color: number }> = [];
+    const rows: Array<{ id: string; name: string; kills: number; deaths: number; color: number }> = [];
     players.forEach((p: any, id: string) => {
-        rows.push({ id, kills: p.kills ?? 0, deaths: p.deaths ?? 0, color: p.color ?? 0xffffff });
+        rows.push({ id, name: p.name || id.slice(0, 6), kills: p.kills ?? 0, deaths: p.deaths ?? 0, color: p.color ?? 0xffffff });
     });
 
     rows.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
 
     const targetInfo = getTargetInfo(myPlayerRef?.targetId);
     const targetHtml = targetInfo
-        ? `<div style="margin-bottom:8px;">Cible: <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:${toHex(targetInfo.color)}"></span> ${targetInfo.id.slice(0, 6)}</div>`
+        ? `<div style="margin-bottom:8px;">Cible: <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:${toHex(targetInfo.color)}"></span> ${targetInfo.label}</div>`
         : `<div style="margin-bottom:8px;opacity:.8">Cible: aucune pour l’instant</div>`;
     let html = targetHtml;
     // ...puis le tableau des scores existant
@@ -207,7 +221,7 @@ function renderScoreboard() {
         html += `
       <div style="display:flex;align-items:center;gap:6px;${me ? 'font-weight:700;' : ''}">
         <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:${toHex(r.color)}"></span>
-        <span style="max-width:140px;overflow:hidden;text-overflow:ellipsis;">${r.id.slice(0, 6)}</span>
+        <span style="max-width:140px;overflow:hidden;text-overflow:ellipsis;">${r.name}</span>
       </div>
       <div>${r.kills}</div>
       <div>${r.deaths}</div>
@@ -281,6 +295,7 @@ function positionCamera(player: any) {
 
     const [room, $] = await joinGame();
     roomRef = room;
+    if (currentName) roomRef.send("setName", { name: currentName });
 
     room.onMessage("attack", ({ id, yaw, t }) => {
         const m = meshes.get(id);

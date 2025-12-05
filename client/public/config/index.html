@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Config joueur</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0c0d10;
+      --panel: rgba(255,255,255,0.06);
+      --border: rgba(255,255,255,0.12);
+      --text: #f3f4f6;
+      --accent: #4caf50;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.04), transparent 28%), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: min(420px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 20px 22px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: 0.2px;
+    }
+    p {
+      margin: 0 0 18px;
+      opacity: 0.85;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      letter-spacing: 0.2px;
+    }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+      transition: border 0.15s ease, background 0.15s ease;
+    }
+    input:focus {
+      border-color: rgba(255,255,255,0.35);
+      background: rgba(255,255,255,0.07);
+    }
+    .actions {
+      margin-top: 16px;
+      display: flex;
+      gap: 10px;
+    }
+    button, a.cta {
+      appearance: none;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      text-decoration: none;
+      text-align: center;
+      transition: transform 0.1s ease, box-shadow 0.15s ease, opacity 0.2s ease;
+    }
+    button.save {
+      background: var(--accent);
+      box-shadow: 0 8px 20px rgba(76, 175, 80, 0.35);
+    }
+    a.cta {
+      background: #3b82f6;
+      box-shadow: 0 8px 20px rgba(59, 130, 246, 0.35);
+      flex: 1;
+    }
+    button:hover, a.cta:hover { opacity: 0.92; }
+    button:active, a.cta:active { transform: translateY(1px); }
+    small {
+      display: block;
+      margin-top: 10px;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Configuration joueur</h1>
+    <p>Définis ton nom. Il est stocké localement et sera utilisé automatiquement dans le jeu.</p>
+    <label for="name">Nom (24 caractères max)</label>
+    <input id="name" type="text" maxlength="24" placeholder="Ton nom" />
+    <div class="actions">
+      <button class="save" id="save">Enregistrer</button>
+      <a class="cta" href="/">Rejoindre le jeu</a>
+    </div>
+    <small>Astuce : tu peux revenir ici à tout moment via /config.</small>
+  </div>
+
+  <script>
+    const KEY = "playerName";
+    const input = document.getElementById("name");
+    const saveBtn = document.getElementById("save");
+
+    function loadName() {
+      const stored = localStorage.getItem(KEY) || "";
+      return stored.trim().slice(0, 24);
+    }
+    function setName(name) {
+      const clean = (name || "").replace(/\s+/g, " ").trim().slice(0, 24);
+      const safe = clean || "Anonyme";
+      localStorage.setItem(KEY, safe);
+      input.value = safe;
+    }
+
+    input.value = loadName() || "";
+
+    saveBtn.addEventListener("click", () => setName(input.value));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") setName(input.value);
+    });
+  </script>
+</body>
+</html>
