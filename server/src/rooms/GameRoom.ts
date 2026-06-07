@@ -10,9 +10,19 @@ const N_NPCS = 100;
 const NPC_SPEED = 3.3;      // un peu plus lent que joueur?
 const PLAYER_SPEED = 5.0;
 const RABBIT_ID = "rabbit";
+const EDGE_PADDING = 0.05;
+const SPRINT_MULT = 1.45;
+const STAMINA_MAX = 100;
+const STAMINA_DRAIN_PER_SEC = 22;
+const STAMINA_REGEN_PER_SEC = 14;
+const STAMINA_REGEN_EXHAUSTED_PER_SEC = 7;
+const STAMINA_REGEN_DELAY_MS = 800;
+const STAMINA_EXHAUSTED_THRESHOLD = 0;
+const STAMINA_MIN_START = 20;
 
 
-type InputMsg = { ax: number; ay: number; yaw: number }; // ax=avant/arrière, ay=gauche/droite
+type InputMsg = { ax: number; ay: number; yaw: number; sprint: boolean }; // ax=avant/arrière, ay=gauche/droite
+type MeleeMsg = { targetId?: string };
 type ShootMsg = { ox: number; oy: number; oz: number; dx: number; dy: number; dz: number; t: number };
 
 function hashHue(id: string): number {
@@ -36,22 +46,29 @@ function hslToHex(h: number, s = 0.6, l = 0.55): number {
 
 export class GameRoom extends Room<State> {
   maxClients = 32; // on accepte des spectateurs mais limitera les “joueurs”
-  private inputs = new Map<string, { ax: number; ay: number; yaw: number }>();
+  private inputs = new Map<string, InputMsg>();
   private huntOrder: string[] = []; // ordre chainé des chasseurs
+  private sprintRegenBlockedUntil = new Map<string, number>();
+  private exhaustedSprintLock = new Set<string>();
 
   onCreate() {
     this.setState(new State());
     this.setPatchRate(1000 / 30); // 33 Hz
-    this.onMessage("input", (client, data: { ax: number; ay: number; yaw: number }) => {
+    this.onMessage("input", (client, data: InputMsg) => {
       const p = this.state.players.get(client.sessionId);
       if (!p || p.spectator || !p.alive) return;
-      this.inputs.set(client.sessionId, data);
+      this.inputs.set(client.sessionId, {
+        ax: Number.isFinite(data.ax) ? data.ax : 0,
+        ay: Number.isFinite(data.ay) ? data.ay : 0,
+        yaw: Number.isFinite(data.yaw) ? data.yaw : 0,
+        sprint: !!data.sprint,
+      });
       // ⬇️ log throttle (1/10) pour vérifier que ça arrive
       if (Math.random() < 0.1) {
         console.log("[input]", client.sessionId, data);
       }
     });
-    this.onMessage("melee", (client) => this.handleMelee(client));
+    this.onMessage("melee", (client, data: MeleeMsg) => this.handleMelee(client, data));
     this.onMessage("setName", (client, data: { name: string }) => this.handleSetName(client, data));
 
     this.spawnRabbit();
@@ -67,6 +84,8 @@ export class GameRoom extends Room<State> {
   onLeave(client: Client) {
     this.state.players.delete(client.sessionId);
     this.inputs.delete(client.sessionId); // ⬅️ nettoyage
+    this.sprintRegenBlockedUntil.delete(client.sessionId);
+    this.exhaustedSprintLock.delete(client.sessionId);
     this.removeFromHuntOrder(client.sessionId);
     this.rebuildHuntChain();
   }
@@ -78,6 +97,12 @@ export class GameRoom extends Room<State> {
     const x = minX + Math.random() * (maxX - minX);
     const z = minZ + Math.random() * (maxZ - minZ);
     return [x, z];
+  }
+
+  private clampToMap(x: number, z: number): [number, number] {
+    const cx = Math.max(HF.minX + EDGE_PADDING, Math.min(HF.maxX - EDGE_PADDING, x));
+    const cz = Math.max(HF.minZ + EDGE_PADDING, Math.min(HF.maxZ - EDGE_PADDING, z));
+    return [cx, cz];
   }
 
   private randColor(): number {
@@ -123,23 +148,49 @@ export class GameRoom extends Room<State> {
 
   private update(dt: number) {
     const dtSec = dt / 1000;
+    const now = Date.now();
 
     // appliquer les inputs stockés
     this.state.players.forEach((p, id) => {
       if (p.spectator || !p.alive) return;
-      const inp = this.inputs.get(id);
-      if (!inp) return;
+      const inp = this.inputs.get(id) ?? { ax: 0, ay: 0, yaw: p.yaw, sprint: false };
       p.yaw = inp.yaw;
-      if (inp.ax === 0 && inp.ay === 0) {
-        return;
+      const isMoving = inp.ax !== 0 || inp.ay !== 0;
+      const regenBlockedUntil = this.sprintRegenBlockedUntil.get(id) ?? 0;
+      const canRegen = now >= regenBlockedUntil;
+      let sprintLocked = this.exhaustedSprintLock.has(id);
+      if (sprintLocked && p.stamina >= STAMINA_MAX) {
+        this.exhaustedSprintLock.delete(id);
+        sprintLocked = false;
       }
 
+      let canStartSprint = p.stamina >= STAMINA_MIN_START;
+      if (p.isSprinting) canStartSprint = p.stamina > STAMINA_EXHAUSTED_THRESHOLD;
+      if (sprintLocked) canStartSprint = false;
+      const wantsSprint = inp.sprint && isMoving;
+      const sprinting = wantsSprint && canStartSprint;
+      p.isSprinting = sprinting;
+
+      if (sprinting) {
+        p.stamina = Math.max(0, p.stamina - STAMINA_DRAIN_PER_SEC * dtSec);
+        this.sprintRegenBlockedUntil.set(id, now + STAMINA_REGEN_DELAY_MS);
+        if (p.stamina <= 0) {
+          this.exhaustedSprintLock.add(id);
+          p.isSprinting = false;
+        }
+      } else if (canRegen) {
+        const regenRate = sprintLocked ? STAMINA_REGEN_EXHAUSTED_PER_SEC : STAMINA_REGEN_PER_SEC;
+        p.stamina = Math.min(STAMINA_MAX, p.stamina + regenRate * dtSec);
+      }
+
+      if (!isMoving) return;
+
       const fwdX = Math.sin(p.yaw), fwdZ = Math.cos(p.yaw);
-      const L = PLAYER_SPEED * dtSec;
+      const speed = PLAYER_SPEED * (sprinting ? SPRINT_MULT : 1);
+      const L = speed * dtSec;
       const dx = L * (fwdX * inp.ax - fwdZ * inp.ay);
       const dz = L * (fwdZ * inp.ax + fwdX * inp.ay);
-      const x = p.x + dx;
-      const z = p.z + dz;
+      const [x, z] = this.clampToMap(p.x + dx, p.z + dz);
       const y = HF.H(x, z);
       const dy = y - p.y;
       const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -147,19 +198,25 @@ export class GameRoom extends Room<State> {
         return;
       }
       const ratio = L / len;
-      p.x += dx * ratio;
-      p.z += dz * ratio;
+      p.x += (dx) * ratio;
+      p.z += (dz) * ratio;
       p.y += dy * ratio;
+
+      // Hard clamp after integration to guarantee in-bounds state.
+      [p.x, p.z] = this.clampToMap(p.x, p.z);
+      //p.y = HF.H(p.x, p.z);
     });
 
     // respawn
-    const now = Date.now();
     this.state.players.forEach(p => {
       if (!p.alive && p.respawnAt && now >= p.respawnAt) {
         p.alive = true;
         delete p.respawnAt;
         [p.x, p.z] = this.randomXZ();
         p.y = HF.H(p.x, p.z);
+        p.stamina = STAMINA_MAX;
+        p.isSprinting = false;
+        this.exhaustedSprintLock.delete(p.id);
         // revient en chasse à la fin de la chaîne
         if (!this.huntOrder.includes(p.id)) this.huntOrder.push(p.id);
         this.rebuildHuntChain();
@@ -193,7 +250,7 @@ export class GameRoom extends Room<State> {
       n.yaw += (Math.random() - 0.5) * 0.1;
 
       // colle au heightfield
-      n.y = HF.H(n.x, n.z);
+      //n.y = HF.H(n.x, n.z);
     });
   }
 
@@ -258,30 +315,31 @@ export class GameRoom extends Room<State> {
   private ATTACK_RANGE = 1.2;     // mètre, ajuster
   private ATTACK_COOLDOWN = 800;  // ms
 
-  private handleMelee(client: Client) {
+  private handleMelee(client: Client, data: MeleeMsg = {}) {
     const attacker = this.state.players.get(client.sessionId);
     if (!attacker || attacker.spectator || !attacker.alive) return;
-
-    const now = Date.now();
-    const last = this.lastAttackAt.get(client.sessionId) ?? 0;
-    if (now - last < this.ATTACK_COOLDOWN) return; // cooldown
-    this.lastAttackAt.set(client.sessionId, now);
-
-    this.broadcast("attack", { id: client.sessionId, yaw: attacker.yaw, t: now });
 
     // position & radius (ton joueur peut avoir rayon 0.3)
     const ar = 0.3;
     const range = this.ATTACK_RANGE;
 
-    const targetId = attacker.targetId;
+    const targetId = typeof data?.targetId === "string" ? data.targetId : "";
     if (!targetId) return;
 
     const targetPlayer = this.state.players.get(targetId);
     const targetNpc = this.state.npcs.get(targetId);
+    let tx: number;
+    let tz: number;
     if (targetPlayer) {
+      if (targetPlayer.id === client.sessionId) return;
       if (targetPlayer.spectator || !targetPlayer.alive) return;
+      tx = targetPlayer.x;
+      tz = targetPlayer.z;
     } else if (!targetNpc) {
       return;
+    } else {
+      tx = targetNpc.x;
+      tz = targetNpc.z;
     }
 
 
@@ -291,45 +349,70 @@ export class GameRoom extends Room<State> {
     //if (!target.alive || target.spectator) return;
 
     // distance 2D simple (ignore Y) -> plus rapide
-    const tx = targetPlayer ? targetPlayer.x : targetNpc!.x;
-    const tz = targetPlayer ? targetPlayer.z : targetNpc!.z;
-
     const dx = attacker.x - tx;
     const dz = attacker.z - tz;
     const dist2 = dx * dx + dz * dz;
-    const minDist = (ar + (targetPlayer?.radius ?? 0.3) + range); // si tu stockes radius
-    if (dist2 <= minDist * minDist) {
-      // (optionnel) vérif direction du coup :
-      const forwardX = Math.sin(attacker.yaw), forwardZ = Math.cos(attacker.yaw);
-      const dot = (forwardX * (tx - attacker.x) + forwardZ * (tz - attacker.z)) / Math.sqrt(dist2);
-      if (dot < 0.2) return; // pas assez face à la cible
+    const minDist = ar + 0.3 + range;
+    if (dist2 > minDist * minDist || dist2 < 0.0001) return;
 
-      if (targetNpc) {
-        // lapin touché : téléporte-le, score pour l'attaquant
-        if (targetNpc.id === RABBIT_ID) {
-          [targetNpc.x, targetNpc.z] = this.randomXZ();
-          targetNpc.y = HF.H(targetNpc.x, targetNpc.z);
-          targetNpc.yaw = Math.random() * Math.PI * 2;
-          attacker.kills++;
-          console.log("[hit rabbit]");
-          this.broadcast("killed", { by: client.sessionId, target: targetNpc.id });
-        }
-        return;
+    // (optionnel) vérif direction du coup :
+    const forwardX = Math.sin(attacker.yaw), forwardZ = Math.cos(attacker.yaw);
+    const dot = (forwardX * (tx - attacker.x) + forwardZ * (tz - attacker.z)) / Math.sqrt(dist2);
+    if (dot < 0.2) return; // pas assez face à la cible
+
+    const now = Date.now();
+    const last = this.lastAttackAt.get(client.sessionId) ?? 0;
+    if (now - last < this.ATTACK_COOLDOWN) return; // cooldown
+    this.lastAttackAt.set(client.sessionId, now);
+
+    this.broadcast("attack", { id: client.sessionId, yaw: attacker.yaw, t: now });
+
+    const killPlayer = (victim: Player) => {
+      victim.alive = false;
+      victim.respawnAt = Date.now() + 10_000;
+      victim.isSprinting = false;
+      this.sprintRegenBlockedUntil.delete(victim.id);
+      this.exhaustedSprintLock.delete(victim.id);
+      this.removeFromHuntOrder(victim.id);
+    };
+
+    if (targetNpc) {
+      if (targetNpc.id === RABBIT_ID && attacker.targetId === RABBIT_ID) {
+        [targetNpc.x, targetNpc.z] = this.randomXZ();
+        targetNpc.y = HF.H(targetNpc.x, targetNpc.z);
+        targetNpc.yaw = Math.random() * Math.PI * 2;
+        attacker.kills++;
+        console.log("[hit rabbit]");
+        this.broadcast("killed", { by: client.sessionId, target: targetNpc.id });
+      } else {
+        killPlayer(attacker);
+        attacker.deaths++;
+        console.log("[wrong npc]");
+        this.rebuildHuntChain();
+        this.broadcast("killed", { by: targetNpc.id, target: attacker.id });
       }
-
-      // kill joueur
-      targetPlayer.alive = false;
-      targetPlayer.respawnAt = Date.now() + 10_000;
-
-      // scores
-      attacker.kills++;
-      targetPlayer.deaths++;
-
-      console.log("[hit]");
-      this.removeFromHuntOrder(targetPlayer.id);
-      this.rebuildHuntChain();
-      this.broadcast("killed", { by: client.sessionId, target: targetPlayer.id });
+      return;
     }
+
+    const killedPlayer = targetPlayer;
+    if (!killedPlayer) return;
+
+    const hitAssignedTarget = killedPlayer.id === attacker.targetId;
+    const victim = hitAssignedTarget ? killedPlayer : attacker;
+
+    killPlayer(victim);
+
+    if (hitAssignedTarget) {
+      attacker.kills++;
+      killedPlayer.deaths++;
+      console.log("[hit]");
+    } else {
+      attacker.deaths++;
+      console.log("[wrong target]");
+    }
+
+    this.rebuildHuntChain();
+    this.broadcast("killed", { by: hitAssignedTarget ? client.sessionId : killedPlayer.id, target: victim.id });
     //});
   }
 

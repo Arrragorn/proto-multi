@@ -91,6 +91,10 @@ const wrapPi = (a: number) => {
   return a;
 };
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+const ATTACK_REACH = 1.8;
+const ATTACK_MARKER_Y_OFFSET = 1.8;
+const CAMERA_PITCH_MIN = -1.2;
+const CAMERA_PITCH_MAX = 1.38;
 let currentName = "";
 
 const hud = document.createElement("div");
@@ -120,6 +124,25 @@ Object.assign(compass.style, {
 });
 const compassCtx = compass.getContext("2d")!;
 document.body.appendChild(compass);
+
+const attackMarker = document.createElement("div");
+attackMarker.textContent = "X";
+Object.assign(attackMarker.style, {
+  position: "fixed",
+  left: "0",
+  top: "0",
+  transform: "translate(-50%, -50%)",
+  color: "#ff3535",
+  fontFamily: "system-ui, sans-serif",
+  fontSize: "34px",
+  fontWeight: "900",
+  lineHeight: "1",
+  textShadow: "0 2px 8px rgba(0,0,0,0.75)",
+  pointerEvents: "none",
+  display: "none",
+  zIndex: "10",
+});
+document.body.appendChild(attackMarker);
 
 // nom chargé localement (défini via /config)
 function loadName() {
@@ -207,10 +230,24 @@ function renderScoreboard() {
     rows.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
 
     const targetInfo = getTargetInfo(myPlayerRef?.targetId);
+    const stamina = Math.round(clamp(myPlayerRef?.stamina ?? 100, 0, 100));
+    const sprinting = !!myPlayerRef?.isSprinting;
+    const staminaColor = stamina < 20 ? "#ff8a8a" : stamina < 50 ? "#ffd37a" : "#8affb3";
     const targetHtml = targetInfo
         ? `<div style="margin-bottom:8px;">Cible: <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:${toHex(targetInfo.color)}"></span> ${targetInfo.label}</div>`
         : `<div style="margin-bottom:8px;opacity:.8">Cible: aucune pour l’instant</div>`;
     let html = targetHtml;
+    html += `
+      <div style="margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <span>Stamina${sprinting ? " (sprint)" : ""}</span>
+          <span>${stamina}%</span>
+        </div>
+        <div style="height:8px;border-radius:99px;background:rgba(255,255,255,0.14);overflow:hidden;">
+          <div style="height:100%;width:${stamina}%;background:${staminaColor};transition:width 80ms linear,background-color 120ms linear;"></div>
+        </div>
+      </div>
+    `;
     // ...puis le tableau des scores existant
 
     html += `<div style="font-weight:600;margin-bottom:6px;">Score</div>`;
@@ -231,8 +268,8 @@ function renderScoreboard() {
     hud.innerHTML = html;
 }
 
-// update toutes les 500 ms (simple et suffisant)
-setInterval(renderScoreboard, 500);
+// update close to the server patch rate so stamina feels fluid while sprinting
+setInterval(renderScoreboard, 1000 / 30);
 
 // --- HDRI environment ---
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -262,11 +299,13 @@ let myPlayerRef: any = null; // référence du joueur local côté état
 let yaw = 0;
 let pitch = 0;
 let keys: Record<string, boolean> = {};
+let currentAttackTargetId = "";
 
 function sendInput(room: any) {
     const ax = (keys["KeyW"] || keys["ArrowUp"] ? 1 : 0) + (keys["KeyS"] || keys["ArrowDown"] ? -1 : 0);
     const ay = (keys["KeyD"] || keys["ArrowRight"] ? 1 : 0) + (keys["KeyA"] || keys["ArrowLeft"] ? -1 : 0);
-    room.send("input", { ax, ay, yaw });
+    const sprint = !!(keys["ShiftLeft"] || keys["ShiftRight"]);
+    room.send("input", { ax, ay, yaw, sprint });
 }
 
 
@@ -283,6 +322,47 @@ function positionCamera(player: any) {
     const back = new THREE.Vector3(0, sinP * dist, -cosP * dist).applyEuler(new THREE.Euler(0, yaw, 0));
     camera.position.copy(target).add(back);
     camera.lookAt(target);
+}
+
+function projectAttackMarkerPosition(x: number, y: number, z: number) {
+    const p = new THREE.Vector3(x, y + ATTACK_MARKER_Y_OFFSET, z).project(camera);
+    if (p.z < -1 || p.z > 1 || p.x < -1 || p.x > 1 || p.y < -1 || p.y > 1) return null;
+    return {
+        x: (p.x * 0.5 + 0.5) * window.innerWidth,
+        y: (-p.y * 0.5 + 0.5) * window.innerHeight,
+        centeredness: p.x * p.x + p.y * p.y,
+    };
+}
+
+function updateAttackMarker() {
+    currentAttackTargetId = "";
+    attackMarker.style.display = "none";
+    if (!roomRef || !myPlayerRef || !myPlayerRef.alive || myPlayerRef.spectator) return;
+
+    let best: { id: string; x: number; y: number; centeredness: number } | null = null;
+    const consider = (id: string, target: any) => {
+        const dx = target.x - myPlayerRef.x;
+        const dz = target.z - myPlayerRef.z;
+        if ((dx * dx + dz * dz) > ATTACK_REACH * ATTACK_REACH) return;
+
+        const marker = projectAttackMarkerPosition(target.x, target.y, target.z);
+        if (!marker) return;
+        if (!best || marker.centeredness < best.centeredness) {
+            best = { id, ...marker };
+        }
+    };
+
+    roomRef.state.players.forEach((p: any, id: string) => {
+        if (id === myId || !p.alive || p.spectator) return;
+        consider(id, p);
+    });
+    roomRef.state.npcs.forEach((n: any, id: string) => consider(id, n));
+
+    if (!best) return;
+    currentAttackTargetId = best.id;
+    attackMarker.style.left = `${best.x}px`;
+    attackMarker.style.top = `${best.y}px`;
+    attackMarker.style.display = "block";
 }
 
 
@@ -382,14 +462,15 @@ function positionCamera(player: any) {
 
     function isMoveKey(code: string) {
         return code === "KeyW" || code === "KeyA" || code === "KeyS" || code === "KeyD" || code === "Space" ||
+            code === "ShiftLeft" || code === "ShiftRight" ||
             code === "ArrowUp" || code === "ArrowDown" || code === "ArrowLeft" || code === "ArrowRight";
     }
-    window.addEventListener("keydown", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = true; if (e.code === "Space") room.send("melee"); });
+    window.addEventListener("keydown", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = true; if (e.code === "Space") room.send("melee", { targetId: currentAttackTargetId }); });
     window.addEventListener("keyup", (e) => { if (isMoveKey(e.code)) e.preventDefault(); keys[e.code] = false; });
     // souris = yaw (ultra simple)
     addEventListener("mousemove", (e) => {
         yaw -= e.movementX * 0.003;
-        pitch = clamp(pitch + e.movementY * 0.0025, -1.2, 0.6);
+        pitch = clamp(pitch + e.movementY * 0.0025, CAMERA_PITCH_MIN, CAMERA_PITCH_MAX);
         if (myPlayerRef) positionCamera(myPlayerRef);
     });
 
@@ -403,6 +484,7 @@ function positionCamera(player: any) {
 
         sendInput(room); // on continue d’envoyer l’état des touches
         drawCompass();
+        updateAttackMarker();
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
     }
