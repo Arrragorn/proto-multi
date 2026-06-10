@@ -2,10 +2,12 @@
 import { joinGame } from "./net";
 import * as THREE from "three";
 import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
-import { playAttackFX } from "./fx";
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 const gltfLoader = new GLTFLoader();
+const fbxLoader = new FBXLoader();
 
 const scene = new THREE.Scene();
 let roomRef: any = null;
@@ -54,11 +56,6 @@ scene.add(dirLight);
 // Optional: visualiser la lumière
 // const helper = new THREE.DirectionalLightHelper(dirLight);
 // scene.add(helper);
-
-//NPCs
-const npcMeshes = new Map<string, THREE.Mesh>();
-const npcGeo = new THREE.CapsuleGeometry(0.28, 0.9, 4, 8);
-
 
 // --- Camera & renderer ---
 
@@ -286,9 +283,29 @@ new HDRLoader()
     });
 
 
-// joueurs = simples capsules visuelles au début
-const meshes = new Map<string, THREE.Mesh>();
-const capsuleGeo = new THREE.CapsuleGeometry(0.3, 1.0, 4, 8);
+type PlayerAnimName = "idle" | "walk" | "run" | "melee";
+type PlayerAvatar = {
+    root: THREE.Object3D;
+    mixer: THREE.AnimationMixer;
+    actions: Partial<Record<PlayerAnimName, THREE.AnimationAction>>;
+    currentAction?: PlayerAnimName;
+    lastX: number;
+    lastZ: number;
+    meleeUntil: number;
+};
+
+const playerAvatars = new Map<string, PlayerAvatar>();
+const npcAvatars = new Map<string, PlayerAvatar>();
+const PLAYER_MODEL_PATH = "/models/characters/Archer.fbx";
+const PLAYER_ANIMATION_PATHS: Record<PlayerAnimName, string> = {
+    idle: "/models/animations/Idle.fbx",
+    walk: "/models/animations/Walking.fbx",
+    run: "/models/animations/Running.fbx",
+    melee: "/models/animations/Melee.fbx",
+};
+const PLAYER_MODEL_SCALE = 0.01;
+const PLAYER_Y_OFFSET = 0;
+const PLAYER_ROTATION_OFFSET = 0;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
 
 
@@ -308,6 +325,138 @@ function sendInput(room: any) {
     room.send("input", { ax, ay, yaw, sprint });
 }
 
+function preparePlayerModel(root: THREE.Object3D) {
+    root.scale.setScalar(PLAYER_MODEL_SCALE);
+    root.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+    });
+}
+
+function setObjectOpacity(root: THREE.Object3D, opacity: number) {
+    root.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const material of materials) {
+            material.transparent = opacity < 1;
+            material.opacity = opacity;
+            material.needsUpdate = true;
+        }
+    });
+}
+
+function firstClip(fbx: THREE.Object3D, fallbackName: string) {
+    const clip = fbx.animations[0];
+    if (clip) clip.name = fallbackName;
+    return clip;
+}
+
+async function loadPlayerAssets() {
+    const [model, idle, walk, run, melee] = await Promise.all([
+        fbxLoader.loadAsync(PLAYER_MODEL_PATH),
+        fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.idle),
+        fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.walk),
+        fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.run),
+        fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.melee),
+    ]);
+
+    preparePlayerModel(model);
+
+    const clips: Partial<Record<PlayerAnimName, THREE.AnimationClip>> = {
+        idle: firstClip(idle, "idle"),
+        walk: firstClip(walk, "walk"),
+        run: firstClip(run, "run"),
+        melee: firstClip(melee, "melee"),
+    };
+
+    return { model, clips };
+}
+
+function createPlayerAvatar(
+    baseModel: THREE.Object3D,
+    clips: Partial<Record<PlayerAnimName, THREE.AnimationClip>>,
+    p: any,
+) {
+    const root = SkeletonUtils.clone(baseModel);
+    const mixer = new THREE.AnimationMixer(root);
+    const actions: Partial<Record<PlayerAnimName, THREE.AnimationAction>> = {};
+
+    for (const name of Object.keys(clips) as PlayerAnimName[]) {
+        const clip = clips[name];
+        if (!clip) continue;
+        const action = mixer.clipAction(clip);
+        action.enabled = true;
+        if (name === "melee") {
+            action.setLoop(THREE.LoopOnce, 1);
+            action.clampWhenFinished = true;
+        }
+        actions[name] = action;
+    }
+
+    const avatar: PlayerAvatar = {
+        root,
+        mixer,
+        actions,
+        lastX: p.x,
+        lastZ: p.z,
+        meleeUntil: 0,
+    };
+    updatePlayerAvatarTransform(avatar, p);
+    playPlayerAction(avatar, "idle", 0);
+    return avatar;
+}
+
+function playPlayerAction(avatar: PlayerAvatar, next: PlayerAnimName, fadeSec = 0.12) {
+    if (avatar.currentAction === next) return;
+    const nextAction = avatar.actions[next] ?? avatar.actions.idle;
+    if (!nextAction) return;
+
+    const previousAction = avatar.currentAction ? avatar.actions[avatar.currentAction] : undefined;
+    nextAction.reset().fadeIn(fadeSec).play();
+    if (previousAction && previousAction !== nextAction) previousAction.fadeOut(fadeSec);
+    avatar.currentAction = next;
+}
+
+function updatePlayerAvatarTransform(avatar: PlayerAvatar, p: any) {
+    avatar.root.position.set(p.x, p.y + PLAYER_Y_OFFSET, p.z);
+    avatar.root.rotation.y = (p.yaw ?? 0) + PLAYER_ROTATION_OFFSET;
+}
+
+function updatePlayerAvatarFromState(avatar: PlayerAvatar, p: any) {
+    const dx = p.x - avatar.lastX;
+    const dz = p.z - avatar.lastZ;
+    const moving = (dx * dx + dz * dz) > 0.000001;
+    const wantedAction: PlayerAnimName =
+        performance.now() < avatar.meleeUntil ? "melee" :
+        moving ? (p.isSprinting ? "run" : "walk") :
+        "idle";
+
+    updatePlayerAvatarTransform(avatar, p);
+    playPlayerAction(avatar, wantedAction);
+    setObjectOpacity(avatar.root, p.alive ? 1 : 0.4);
+    avatar.lastX = p.x;
+    avatar.lastZ = p.z;
+}
+
+function updateNpcAvatarFromState(avatar: PlayerAvatar, n: any) {
+    const dx = n.x - avatar.lastX;
+    const dz = n.z - avatar.lastZ;
+    const moving = (dx * dx + dz * dz) > 0.000001;
+
+    avatar.root.position.set(n.x, n.y + PLAYER_Y_OFFSET, n.z);
+    if (typeof n.yaw === "number") {
+        avatar.root.rotation.y = n.yaw + PLAYER_ROTATION_OFFSET;
+    } else if (moving) {
+        avatar.root.rotation.y = Math.atan2(dx, dz) + PLAYER_ROTATION_OFFSET;
+    }
+
+    playPlayerAction(avatar, moving ? "walk" : "idle");
+    avatar.lastX = n.x;
+    avatar.lastZ = n.z;
+}
 
 
 
@@ -368,7 +517,10 @@ function updateAttackMarker() {
 
 (async () => {
 
-    const gltf = await gltfLoader.loadAsync('/models/city2.glb');
+    const [{ model: playerModel, clips: playerClips }, gltf] = await Promise.all([
+        loadPlayerAssets(),
+        gltfLoader.loadAsync('/models/city2.glb'),
+    ]);
     gltf.scene.scale.set(5, 4, 5);
     scene.add(gltf.scene);
 
@@ -378,9 +530,11 @@ function updateAttackMarker() {
     if (currentName) roomRef.send("setName", { name: currentName });
 
     room.onMessage("attack", ({ id, yaw, t }) => {
-        const m = meshes.get(id);
-        if (!m) return;
-        playAttackFX(m, yaw, scene);
+        const avatar = playerAvatars.get(id) ?? npcAvatars.get(id);
+        if (avatar) {
+            avatar.meleeUntil = performance.now() + 450;
+            playPlayerAction(avatar, "melee", 0.05);
+        }
     });
 
     myId = room.sessionId;
@@ -391,24 +545,16 @@ function updateAttackMarker() {
         $(room.state).players.onAdd((p: any, id: string) => {
             if (id === myId) myPlayerRef = p;
             console.log("[onAdd]", id);
-            const m = new THREE.Mesh(
-                capsuleGeo,
-                new THREE.MeshStandardMaterial({ color: p.color }) // 👈 couleur unique
-            ); m.castShadow = true;
-            m.position.set(p.x, p.y + 0.95, p.z);
-            meshes.set(id, m);
-            scene.add(m);
+            const avatar = createPlayerAvatar(playerModel, playerClips, p);
+            playerAvatars.set(id, avatar);
+            scene.add(avatar.root);
             if (id === myId) {
                 positionCamera(p);
             }
 
             $(p).onChange(() => {
-                const mm = meshes.get(id)!;
-                mm.position.set(p.x, p.y + 0.95, p.z);
-                const mat = mm.material as THREE.MeshStandardMaterial;
-                mat.transparent = !p.alive;
-                mat.opacity = p.alive ? 1 : 0.4;
-                mat.needsUpdate = true;
+                const avatar = playerAvatars.get(id);
+                if (avatar) updatePlayerAvatarFromState(avatar, p);
                 if (id === myId) {
                     positionCamera(p);
                 }
@@ -418,41 +564,32 @@ function updateAttackMarker() {
 
         $(room.state).players.onRemove((_: any, id: string) => {
             if (id === myId) myPlayerRef = null;
-            const m = meshes.get(id);
-            if (m) scene.remove(m);
-            meshes.delete(id);
+            const avatar = playerAvatars.get(id);
+            if (avatar) scene.remove(avatar.root);
+            playerAvatars.delete(id);
         });
 
         $(room.state).npcs.onAdd((n: any, id: string) => {
-            const m = new THREE.Mesh(
-                npcGeo,
-                new THREE.MeshStandardMaterial({
-                    color: n.color,
-                    transparent: false,
-                    opacity: 1.0,
-                })
-            );
-            m.castShadow = true;
-            m.position.set(n.x, n.y + 0.95, n.z);
-            npcMeshes.set(id, m);
-            scene.add(m);
+            const avatar = createPlayerAvatar(playerModel, playerClips, n);
+            npcAvatars.set(id, avatar);
+            scene.add(avatar.root);
 
             $(n).onChange(() => {
-                const mm = npcMeshes.get(id); if (!mm) return;
-                mm.position.set(n.x, n.y + 0.95, n.z);
+                const avatar = npcAvatars.get(id);
+                if (avatar) updateNpcAvatarFromState(avatar, n);
             });
         });
 
         // onRemove
         $(room.state).npcs.onRemove((_: any, id: string) => {
-            const m = npcMeshes.get(id);
-            if (m) scene.remove(m);
-            npcMeshes.delete(id);
+            const avatar = npcAvatars.get(id);
+            if (avatar) scene.remove(avatar.root);
+            npcAvatars.delete(id);
         });
 
         // hydrate
         /*npcs.forEach((_n: any, id: string) => {
-            if (!npcMeshes.has(id)) $(room.state).npcs.triggerOnAdd(id);
+            if (!npcAvatars.has(id)) $(room.state).npcs.triggerOnAdd(id);
         });*/
 
     });
@@ -485,6 +622,8 @@ function updateAttackMarker() {
         sendInput(room); // on continue d’envoyer l’état des touches
         drawCompass();
         updateAttackMarker();
+        playerAvatars.forEach((avatar) => avatar.mixer.update(dtSec));
+        npcAvatars.forEach((avatar) => avatar.mixer.update(dtSec));
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
     }

@@ -319,6 +319,13 @@ export class GameRoom extends Room<State> {
     const attacker = this.state.players.get(client.sessionId);
     if (!attacker || attacker.spectator || !attacker.alive) return;
 
+    const now = Date.now();
+    const last = this.lastAttackAt.get(client.sessionId) ?? 0;
+    if (now - last < this.ATTACK_COOLDOWN) return; // cooldown
+    this.lastAttackAt.set(client.sessionId, now);
+
+    this.broadcast("attack", { id: client.sessionId, yaw: attacker.yaw, t: now });
+
     // position & radius (ton joueur peut avoir rayon 0.3)
     const ar = 0.3;
     const range = this.ATTACK_RANGE;
@@ -359,13 +366,6 @@ export class GameRoom extends Room<State> {
     const forwardX = Math.sin(attacker.yaw), forwardZ = Math.cos(attacker.yaw);
     const dot = (forwardX * (tx - attacker.x) + forwardZ * (tz - attacker.z)) / Math.sqrt(dist2);
     if (dot < 0.2) return; // pas assez face à la cible
-
-    const now = Date.now();
-    const last = this.lastAttackAt.get(client.sessionId) ?? 0;
-    if (now - last < this.ATTACK_COOLDOWN) return; // cooldown
-    this.lastAttackAt.set(client.sessionId, now);
-
-    this.broadcast("attack", { id: client.sessionId, yaw: attacker.yaw, t: now });
 
     const killPlayer = (victim: Player) => {
       victim.alive = false;
