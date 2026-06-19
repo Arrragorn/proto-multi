@@ -283,14 +283,17 @@ new HDRLoader()
     });
 
 
-type PlayerAnimName = "idle" | "walk" | "run" | "melee";
+type PlayerAnimName = "idle" | "walk" | "run" | "climb" | "melee";
 type PlayerAvatar = {
     root: THREE.Object3D;
     mixer: THREE.AnimationMixer;
     actions: Partial<Record<PlayerAnimName, THREE.AnimationAction>>;
     currentAction?: PlayerAnimName;
     lastX: number;
+    lastY: number;
     lastZ: number;
+    locomotionAction: PlayerAnimName;
+    lastMovedAt: number;
     meleeUntil: number;
 };
 
@@ -301,11 +304,37 @@ const PLAYER_ANIMATION_PATHS: Record<PlayerAnimName, string> = {
     idle: "/models/animations/Idle.fbx",
     walk: "/models/animations/Walking.fbx",
     run: "/models/animations/Running.fbx",
+    climb: "/models/animations/Climbing.fbx",
     melee: "/models/animations/Melee.fbx",
 };
 const PLAYER_MODEL_SCALE = 0.01;
 const PLAYER_Y_OFFSET = 0;
 const PLAYER_ROTATION_OFFSET = 0;
+const MOVEMENT_EPSILON_SQ = 0.000001;
+const STEEP_SURFACE_SLOPE = 0.45;
+const REMOTE_PLAYER_IDLE_TIMEOUT_MS = 140;
+const REMOTE_PLAYER_ALWAYS_ANIMATE_DISTANCE = 50;
+const REMOTE_PLAYER_VISIBLE_ANIMATE_DISTANCE = 120;
+const REMOTE_PLAYER_RENDER_DISTANCE = 140;
+const NPC_ALWAYS_ANIMATE_DISTANCE = 35;
+const NPC_VISIBLE_ANIMATE_DISTANCE = 80;
+const NPC_RENDER_DISTANCE = 95;
+const AVATAR_CAMERA_DOT_MIN = 0.15;
+type AvatarCullingConfig = {
+    alwaysAnimateDistanceSq: number;
+    visibleAnimateDistanceSq: number;
+    renderDistanceSq: number;
+};
+const remotePlayerCulling: AvatarCullingConfig = {
+    alwaysAnimateDistanceSq: REMOTE_PLAYER_ALWAYS_ANIMATE_DISTANCE * REMOTE_PLAYER_ALWAYS_ANIMATE_DISTANCE,
+    visibleAnimateDistanceSq: REMOTE_PLAYER_VISIBLE_ANIMATE_DISTANCE * REMOTE_PLAYER_VISIBLE_ANIMATE_DISTANCE,
+    renderDistanceSq: REMOTE_PLAYER_RENDER_DISTANCE * REMOTE_PLAYER_RENDER_DISTANCE,
+};
+const npcCulling: AvatarCullingConfig = {
+    alwaysAnimateDistanceSq: NPC_ALWAYS_ANIMATE_DISTANCE * NPC_ALWAYS_ANIMATE_DISTANCE,
+    visibleAnimateDistanceSq: NPC_VISIBLE_ANIMATE_DISTANCE * NPC_VISIBLE_ANIMATE_DISTANCE,
+    renderDistanceSq: NPC_RENDER_DISTANCE * NPC_RENDER_DISTANCE,
+};
 scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
 
 
@@ -317,6 +346,8 @@ let yaw = 0;
 let pitch = 0;
 let keys: Record<string, boolean> = {};
 let currentAttackTargetId = "";
+const cameraForward = new THREE.Vector3();
+const toAvatar = new THREE.Vector3();
 
 function sendInput(room: any) {
     const ax = (keys["KeyW"] || keys["ArrowUp"] ? 1 : 0) + (keys["KeyS"] || keys["ArrowDown"] ? -1 : 0);
@@ -355,11 +386,12 @@ function firstClip(fbx: THREE.Object3D, fallbackName: string) {
 }
 
 async function loadPlayerAssets() {
-    const [model, idle, walk, run, melee] = await Promise.all([
+    const [model, idle, walk, run, climb, melee] = await Promise.all([
         fbxLoader.loadAsync(PLAYER_MODEL_PATH),
         fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.idle),
         fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.walk),
         fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.run),
+        fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.climb),
         fbxLoader.loadAsync(PLAYER_ANIMATION_PATHS.melee),
     ]);
 
@@ -369,6 +401,7 @@ async function loadPlayerAssets() {
         idle: firstClip(idle, "idle"),
         walk: firstClip(walk, "walk"),
         run: firstClip(run, "run"),
+        climb: firstClip(climb, "climb"),
         melee: firstClip(melee, "melee"),
     };
 
@@ -401,7 +434,10 @@ function createPlayerAvatar(
         mixer,
         actions,
         lastX: p.x,
+        lastY: p.y,
         lastZ: p.z,
+        locomotionAction: "idle",
+        lastMovedAt: performance.now(),
         meleeUntil: 0,
     };
     updatePlayerAvatarTransform(avatar, p);
@@ -425,26 +461,40 @@ function updatePlayerAvatarTransform(avatar: PlayerAvatar, p: any) {
     avatar.root.rotation.y = (p.yaw ?? 0) + PLAYER_ROTATION_OFFSET;
 }
 
+function getLocomotionAction(dx: number, dy: number, dz: number, sprinting = false): PlayerAnimName {
+    const horizontalDist = Math.hypot(dx, dz);
+    if ((horizontalDist * horizontalDist) <= MOVEMENT_EPSILON_SQ) return "idle";
+    if (Math.abs(dy) / horizontalDist >= STEEP_SURFACE_SLOPE) return "climb";
+    return sprinting ? "run" : "walk";
+}
+
 function updatePlayerAvatarFromState(avatar: PlayerAvatar, p: any) {
     const dx = p.x - avatar.lastX;
+    const dy = p.y - avatar.lastY;
     const dz = p.z - avatar.lastZ;
-    const moving = (dx * dx + dz * dz) > 0.000001;
+    const moving = (dx * dx + dz * dz) > MOVEMENT_EPSILON_SQ;
+    if (moving) avatar.lastMovedAt = performance.now();
+    avatar.locomotionAction = getLocomotionAction(dx, dy, dz, !!p.isSprinting);
     const wantedAction: PlayerAnimName =
         performance.now() < avatar.meleeUntil ? "melee" :
-        moving ? (p.isSprinting ? "run" : "walk") :
+        moving ? avatar.locomotionAction :
         "idle";
 
     updatePlayerAvatarTransform(avatar, p);
     playPlayerAction(avatar, wantedAction);
     setObjectOpacity(avatar.root, p.alive ? 1 : 0.4);
     avatar.lastX = p.x;
+    avatar.lastY = p.y;
     avatar.lastZ = p.z;
 }
 
 function updateNpcAvatarFromState(avatar: PlayerAvatar, n: any) {
     const dx = n.x - avatar.lastX;
+    const dy = n.y - avatar.lastY;
     const dz = n.z - avatar.lastZ;
-    const moving = (dx * dx + dz * dz) > 0.000001;
+    const moving = (dx * dx + dz * dz) > MOVEMENT_EPSILON_SQ;
+    if (moving) avatar.lastMovedAt = performance.now();
+    avatar.locomotionAction = getLocomotionAction(dx, dy, dz);
 
     avatar.root.position.set(n.x, n.y + PLAYER_Y_OFFSET, n.z);
     if (typeof n.yaw === "number") {
@@ -453,9 +503,77 @@ function updateNpcAvatarFromState(avatar: PlayerAvatar, n: any) {
         avatar.root.rotation.y = Math.atan2(dx, dz) + PLAYER_ROTATION_OFFSET;
     }
 
-    playPlayerAction(avatar, moving ? "walk" : "idle");
+    playPlayerAction(avatar, moving ? avatar.locomotionAction : "idle");
     avatar.lastX = n.x;
+    avatar.lastY = n.y;
     avatar.lastZ = n.z;
+}
+
+function hasMovementInput() {
+    return !!(
+        keys["KeyW"] || keys["ArrowUp"] ||
+        keys["KeyS"] || keys["ArrowDown"] ||
+        keys["KeyD"] || keys["ArrowRight"] ||
+        keys["KeyA"] || keys["ArrowLeft"]
+    );
+}
+
+function updateLocalPlayerAnimation(avatar: PlayerAvatar, now: number) {
+    if (now < avatar.meleeUntil) {
+        playPlayerAction(avatar, "melee");
+        return;
+    }
+
+    if (!myPlayerRef?.alive || myPlayerRef?.spectator) {
+        playPlayerAction(avatar, "idle");
+        return;
+    }
+
+    if (!hasMovementInput()) {
+        playPlayerAction(avatar, "idle");
+        return;
+    }
+
+    avatar.lastMovedAt = now;
+    playPlayerAction(avatar, avatar.locomotionAction === "climb" ? "climb" : myPlayerRef.isSprinting ? "run" : "walk");
+}
+
+function settleRemotePlayerAnimation(avatar: PlayerAvatar, now: number) {
+    if (now < avatar.meleeUntil) return;
+    if ((avatar.currentAction === "walk" || avatar.currentAction === "run" || avatar.currentAction === "climb") &&
+        now - avatar.lastMovedAt > REMOTE_PLAYER_IDLE_TIMEOUT_MS) {
+        playPlayerAction(avatar, "idle");
+    }
+}
+
+function updateAvatarCulling(avatar: PlayerAvatar, dtSec: number, config: AvatarCullingConfig) {
+    if (!myPlayerRef) {
+        avatar.root.visible = true;
+        avatar.mixer.update(dtSec);
+        return;
+    }
+
+    toAvatar.subVectors(avatar.root.position, camera.position);
+    const distSq = toAvatar.lengthSq();
+    const close = distSq <= config.alwaysAnimateDistanceSq;
+    const inRenderRange = distSq <= config.renderDistanceSq;
+    let inCameraDirection = false;
+
+    if (!close && inRenderRange && distSq > 0.0001) {
+        camera.getWorldDirection(cameraForward);
+        inCameraDirection = cameraForward.dot(toAvatar.normalize()) > AVATAR_CAMERA_DOT_MIN;
+    }
+
+    avatar.root.visible = inRenderRange && (close || inCameraDirection);
+
+    if (close || (inCameraDirection && distSq <= config.visibleAnimateDistanceSq)) {
+        avatar.mixer.update(dtSec);
+    }
+}
+
+function updateLocalAvatar(avatar: PlayerAvatar, dtSec: number) {
+    avatar.root.visible = true;
+    avatar.mixer.update(dtSec);
 }
 
 
@@ -622,8 +740,16 @@ function updateAttackMarker() {
         sendInput(room); // on continue d’envoyer l’état des touches
         drawCompass();
         updateAttackMarker();
-        playerAvatars.forEach((avatar) => avatar.mixer.update(dtSec));
-        npcAvatars.forEach((avatar) => avatar.mixer.update(dtSec));
+        playerAvatars.forEach((avatar, id) => {
+            if (id === myId) {
+                updateLocalPlayerAnimation(avatar, now);
+                updateLocalAvatar(avatar, dtSec);
+            } else {
+                settleRemotePlayerAnimation(avatar, now);
+                updateAvatarCulling(avatar, dtSec, remotePlayerCulling);
+            }
+        });
+        npcAvatars.forEach((avatar) => updateAvatarCulling(avatar, dtSec, npcCulling));
         renderer.render(scene, camera);
         requestAnimationFrame(tick);
     }
